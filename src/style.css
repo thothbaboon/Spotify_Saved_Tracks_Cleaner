@@ -1,0 +1,61 @@
+#app {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  max-width: 800px;
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+
+#create-playlist {
+  border-bottom: 1px solid #ccc;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+}
+
+#playlists-column,
+#playlists-list {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+#playlists-list > * {
+  margin-bottom: 10px;
+}
+
+#main-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+  flex: 1;
+}
+
+#current-track {
+  text-align: center;
+  max-width: 500px;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+#title,
+#artist {
+  font-weight: bold;
+  padding: 0;
+  margin: 0;
+}
+
+#title {
+  font-size: xx-large;
+  margin-top: 16px;
+}
+#artist {
+  font-size: x-large;
+  margin-top: 12px;
+}

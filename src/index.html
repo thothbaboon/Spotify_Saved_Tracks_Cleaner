@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spotify Saved Tracks Cleaner</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="main-content">
+        <div id="current-track"></div>
+      </div>
+      <div id="playlists-column">
+        <div id="create-playlist">
+          <input
+            type="text"
+            id="new-playlist-name"
+            placeholder="New playlist name"
+          />
+          <button id="create-playlist-btn">Create</button>
+        </div>
+        <div id="playlists-list"></div>
+      </div>
+    </div>
+    <script
+      src="https://code.jquery.com/jquery-3.7.1.min.js"
+      integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo="
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      const pageSize = 25;
+      let nextTracksUrl = `https://api.spotify.com/v1/me/tracks?limit=${pageSize}&offset=0`;
+
+      let currentTrackIndex = 0;
+      let tracks = [];
+      let playlists = [];
+
+      let toRemoveFromSaved = [];
+      let tracksToAddToPlaylist = new Map();
+
+      let userId = null;
+      let accessToken = null;
+      let refreshToken = null;
+      let clientId = null;
+
+      const keyboardShortcuts = [
+        "a",
+        "z",
+        "e",
+        "r",
+        "t",
+        "y",
+        "u",
+        "i",
+        "o",
+        "p",
+      ];
+      let keyToPlaylistMap = {};
+
+      // Rendering
+
+      function displayCurrentTrack() {
+        let html = `
+          <div>
+              <img src="${tracks[currentTrackIndex].image}" alt="Album cover" style="max-width: 300px;"><br>
+              <p id="title">${tracks[currentTrackIndex].title}</p>
+              <p id="artist">${tracks[currentTrackIndex].artist}</p>
+          </div>
+        `;
+        $("#current-track").html(html);
+      }
+
+      function displayPlaylists() {
+        keyToPlaylistMap = {};
+        let html = "";
+        playlists.forEach((playlist, index) => {
+          const shortcutKey = keyboardShortcuts[index];
+          keyToPlaylistMap[shortcutKey] = playlist.id;
+
+          html += `<button class="playlist-btn" data-id="${playlist.id}">${shortcutKey} - ${playlist.name}</button>`;
+        });
+
+        let shortcutKeyDelete = keyboardShortcuts[playlists.length];
+        keyToPlaylistMap[shortcutKeyDelete] = "delete";
+        html += `<button class="playlist-btn" data-id="delete">${shortcutKeyDelete} - Delete from Saved</button>`;
+
+        let shortcutKeyKeep = keyboardShortcuts[playlists.length + 1];
+        keyToPlaylistMap[shortcutKeyKeep] = "keep";
+        html += `<button class="playlist-btn" data-id="keep">${shortcutKeyKeep} - Keep in Saved</button>`;
+        $("#playlists-list").html(html);
+      }
+
+      // Login
+
+      function login() {
+        fetch("http://127.0.0.1:8000/login")
+          .then((response) => response.json())
+          .then((result) => {
+            window.location.href = result.url;
+          });
+      }
+
+      async function refreshAccessToken() {
+        const url = "https://accounts.spotify.com/api/token";
+
+        const payload = {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: refreshToken,
+            client_id: clientId,
+          }),
+        };
+        const body = await fetch(url, payload);
+        const response = await body.json();
+
+        localStorage.setItem("accessToken", response.access_token);
+        accessToken = response.access_token;
+
+        if (response.refresh_token) {
+          localStorage.setItem("refreshToken", response.refresh_token);
+          refreshToken = response.refresh_token;
+        }
+      }
+
+      // Fetch data
+
+      async function fetchTracks() {
+        const response = await fetch(nextTracksUrl, {
+          headers: {
+            Authorization: "Bearer " + accessToken,
+          },
+        });
+        const result = await response.json();
+
+        if (result.error) {
+          throw new Error(result.error.message);
+        }
+
+        tracks = result.items.map((item) => ({
+          id: item.track.id,
+          title: item.track.name,
+          artist: item.track.artists.map((a) => a.name).join(", "),
+          image: item.track.album.images[0].url,
+        }));
+        nextTracksUrl = result.next;
+        currentTrackIndex = 0;
+        displayCurrentTrack();
+      }
+
+      async function fetchPlaylists() {
+        const response = await fetch(
+          "https://api.spotify.com/v1/me/playlists",
+          {
+            headers: {
+              Authorization: "Bearer " + accessToken,
+            },
+          }
+        );
+        const result = await response.json();
+
+        if (result.error) {
+          throw new Error(result.error.message);
+        }
+
+        playlists = result.items.map((item) => ({
+          id: item.id,
+          name: item.name,
+        }));
+        displayPlaylists();
+      }
+
+      // Actions
+
+      async function applyChanges() {
+        await deleteTracks();
+        await addTracksToPlaylists();
+      }
+
+      // FIXME: Playlists can contains duplicates
+      async function addTracksToPlaylists() {
+        await Promise.all(
+          Array.from(tracksToAddToPlaylist.entries()).map(
+            ([playlistId, trackIds]) => {
+              if (trackIds.length > 0) {
+                return fetch(
+                  `https://api.spotify.com/v1/playlists/${playlistId}/tracks`,
+                  {
+                    headers: {
+                      Authorization: "Bearer " + accessToken,
+                    },
+                    method: "post",
+                    body: JSON.stringify({
+                      uris: trackIds.map((id) => `spotify:track:${id}`),
+                    }),
+                  }
+                );
+              }
+            }
+          )
+        );
+      }
+
+      async function deleteTracks() {
+        if (toRemoveFromSaved.length > 0) {
+          await fetch(`https://api.spotify.com/v1/me/tracks`, {
+            headers: {
+              Authorization: "Bearer " + accessToken,
+            },
+            method: "delete",
+            body: JSON.stringify({ ids: toRemoveFromSaved }),
+          });
+
+          toRemoveFromSaved = [];
+        }
+      }
+
+      async function createPlaylist(name) {
+        await fetch(`https://api.spotify.com/v1/users/${userId}/playlists`, {
+          method: "post",
+          headers: {
+            Authorization: "Bearer " + accessToken,
+          },
+          body: JSON.stringify({ name }),
+        });
+
+        await fetchPlaylists();
+        $("#new-playlist-name").val("");
+      }
+
+      // Event listeners
+
+      $("#create-playlist-btn").on("click", function () {
+        const name = $("#new-playlist-name").val();
+        createPlaylist(name);
+      });
+
+      function handlePlaylistKeyPressed(playlistId) {
+        const currentTrackId = tracks[currentTrackIndex].id;
+
+        if (playlistId === "delete") {
+          toRemoveFromSaved.push(currentTrackId);
+        } else if (playlistId != "keep") {
+          if (!tracksToAddToPlaylist.has(playlistId)) {
+            tracksToAddToPlaylist.set(playlistId, []);
+          }
+          tracksToAddToPlaylist.get(playlistId).push(currentTrackId);
+          toRemoveFromSaved.push(currentTrackId);
+        }
+
+        currentTrackIndex += 1;
+        if (currentTrackIndex < tracks.length) {
+          displayCurrentTrack();
+        } else {
+          done();
+        }
+      }
+
+      $(document).on("keydown", function (e) {
+        const keyPressed = e.key.toLowerCase();
+        const isInputActive = $(document.activeElement).is("input");
+
+        if (
+          !isInputActive &&
+          tracks.length > 0 &&
+          currentTrackIndex < tracks.length &&
+          keyboardShortcuts.includes(keyPressed)
+        ) {
+          const playlistId = keyToPlaylistMap[keyPressed];
+          if (playlistId) {
+            handlePlaylistKeyPressed(playlistId);
+          }
+        }
+      });
+
+      $(document).on("click", ".playlist-btn", function () {
+        if (tracks.length > 0 && currentTrackIndex < tracks.length) {
+          const playlistId = $(this).data("id");
+          handlePlaylistKeyPressed(playlistId);
+        }
+      });
+
+      // Lifecycle
+
+      async function done() {
+        await applyChanges();
+        if (nextTracksUrl) {
+          await fetchTracks();
+        } else {
+          $("#current-track").html(`<div>✅</div>`);
+        }
+      }
+
+      async function init() {
+        accessToken = localStorage.getItem("accessToken");
+        refreshToken = localStorage.getItem("refreshToken");
+        userId = localStorage.getItem("userId");
+        clientId = localStorage.getItem("clientId");
+
+        try {
+          await Promise.all([fetchTracks(), fetchPlaylists()]);
+        } catch (error) {
+          if (error.message === "Invalid access token") {
+            await refreshAccessToken();
+            await fetchTracks();
+            await fetchPlaylists();
+          } else if (error.message === "The access token expired") {
+            localStorage.removeItem("accessToken");
+            localStorage.removeItem("refreshToken");
+            localStorage.removeItem("userId");
+            localStorage.removeItem("clientId");
+            login();
+          } else {
+            throw error;
+          }
+        }
+      }
+
+      if (localStorage.getItem("accessToken")) {
+        init();
+      } else if (window.location.hash) {
+        const params = new URLSearchParams(window.location.hash.substring(1));
+        localStorage.setItem("accessToken", params.get("accessToken"));
+        localStorage.setItem("refreshToken", params.get("refreshToken"));
+        localStorage.setItem("userId", params.get("userId"));
+        localStorage.setItem("clientId", params.get("clientId"));
+
+        init();
+      } else {
+        login();
+      }
+    </script>
+  </body>
+</html>
